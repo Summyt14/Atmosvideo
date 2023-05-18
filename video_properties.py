@@ -14,31 +14,37 @@ class ExtractVideoProperties:
     """
     A class that handles the extraction of video properties.
     """
-    def __init__(self) -> None:
+    def __init__(self):
         self.status = DISCONNECTED
         self.thread = None
         self.lock = threading.Lock()
         self.queue = queue.Queue()
 
-    def start_extracting(self, video_path: str):
+    def start_extracting(self, video_path: str, width: int):
         """
         Start extracting properties from the video.
 
         Args:
             video_path (str): The path of the video stream.
+            width (int): The width which the video will be resized to.
         """
         self.status = RUNNING
-        self.thread = threading.Thread(target=self.run_thread, args=(video_path,))
+        self.thread = threading.Thread(target=self.run_thread, args=(video_path, width))
         self.thread.start()
 
-    def run_thread(self, video_path: str):
+    def run_thread(self, video_path: str, width: int):
         """
         Runs the thread for capturing and processing frames from the video.
 
         Args:
             video_path (str): The path of the video stream.
+            width (int): The width which the video will be resized to.
         """
         cap = cv2.VideoCapture(video_path)
+        cap_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        cap_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        new_height = int(width * cap_height / cap_width)
+
         if not cap.isOpened():
             self.status = ERROR
             print("Error opening video file")
@@ -46,6 +52,7 @@ class ExtractVideoProperties:
 
         self.lock.acquire()
         ret, frame = cap.read()
+        frame = cv2.resize(frame, (width, new_height), interpolation=cv2.INTER_AREA)
         prev_frame = frame
         frame_num = 0
 
@@ -70,6 +77,8 @@ class ExtractVideoProperties:
             prev_frame = frame
             frame_num += 1
             ret, frame = cap.read()
+            frame = cv2.resize(frame, (width, new_height), interpolation=cv2.INTER_AREA)
+
             # Break the loop if no more frames
             if not ret:
                 self.status = FINISHED
@@ -94,7 +103,7 @@ class ExtractVideoProperties:
         energy = np.sum(flow[..., 0]**2 + flow[..., 1]**2)
         return energy
     
-    def shutdown(self) -> None:
+    def shutdown(self):
         """
         Shutdowns the properties extractor.
         """
@@ -103,7 +112,7 @@ class ExtractVideoProperties:
         self.lock.release()
         self.thread.join()
 
-    def get_values(self) -> None:
+    def get_values(self):
       """
       Retrieves the values of frame_num, energy, hue, saturation, and brightness from the queue.
       Returns:
@@ -119,7 +128,7 @@ class ExtractVideoProperties:
 if __name__ == "__main__":
     path = 'example_videos/v4.mp4'
     video_extractor = ExtractVideoProperties()
-    video_extractor.start_extracting(path)
+    video_extractor.start_extracting(path, 320)
     while video_extractor.status == RUNNING:
         values = video_extractor.get_values()
         if values is not None:
