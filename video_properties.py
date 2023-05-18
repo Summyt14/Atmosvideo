@@ -11,6 +11,9 @@ CANCELED = 4
 
 
 class ExtractVideoProperties:
+    """
+    A class that handles the extraction of video properties.
+    """
     def __init__(self) -> None:
         self.status = DISCONNECTED
         self.thread = None
@@ -18,6 +21,12 @@ class ExtractVideoProperties:
         self.queue = queue.Queue()
 
     def start_extracting(self, video_path: str):
+        """
+        Start extracting properties from the video.
+
+        Args:
+            video_path (str): The path of the video stream.
+        """
         self.status = RUNNING
         self.thread = threading.Thread(target=self.run_thread, args=(video_path,))
         self.thread.start()
@@ -27,7 +36,7 @@ class ExtractVideoProperties:
         Runs the thread for capturing and processing frames from the video.
 
         Args:
-            video_url (str): The path of the video stream.
+            video_path (str): The path of the video stream.
         """
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
@@ -69,6 +78,13 @@ class ExtractVideoProperties:
         self.lock.release()
 
     def calculate_energy(self, frame, prev_frame):
+        """
+        Calculate the energy from the previous frame and the current frame.
+
+        Args:
+            frame: The current frame
+            prev_frame: The previous frame
+        """
         # Convert frames to grayscale
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         prev_gray = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
@@ -79,12 +95,15 @@ class ExtractVideoProperties:
         return energy
     
     def shutdown(self) -> None:
+        """
+        Shutdowns the properties extractor.
+        """
         self.lock.acquire()
         self.status = CANCELED
         self.lock.release()
         self.thread.join()
 
-    def get_values(self):
+    def get_values(self) -> None:
       """
       Retrieves the values of frame_num, energy, hue, saturation, and brightness from the queue.
       Returns:
