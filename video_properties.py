@@ -21,82 +21,116 @@ class ExtractVideoProperties:
         self.lock = threading.Lock()
         self.queue = queue.Queue()
 
-    def start_extracting(self, video_path: str, width: int, do_plot: bool = False):
+    def start_extracting(self, video_path: str, width: int, num_threads: int):
         """
         Start extracting properties from the video.
 
         Args:
             video_path (str): The path of the video stream.
             width (int): The width which the video will be resized to.
-            do_plot: Show the movement flow image.
+            num_threads (int): The number of threads that will work simultaneously on the extractor.
         """
         self.status = RUNNING
-        self.thread = threading.Thread(target=self.run_thread, args=(video_path, width, do_plot))
+        self.thread = threading.Thread(target=self.run_extractor, args=(video_path, width, num_threads))
         self.thread.start()
 
-    def run_thread(self, video_path: str, width: int, do_plot: bool):
+    def run_extractor(self, video_path: str, width: int, num_threads: int):
         """
         Runs the thread for capturing and processing frames from the video.
 
         Args:
             video_path (str): The path of the video stream.
             width (int): The width which the video will be resized to.
-            do_plot: Show the movement flow image.
         """
-        cap = cv2.VideoCapture(video_path)
-        cap_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        cap_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        capture = cv2.VideoCapture(video_path)
+        frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
+        cap_width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+        cap_height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
         new_height = int(width * cap_height / cap_width)
 
-        if not cap.isOpened():
+        if not capture.isOpened():
             self.status = ERROR
             print("Error opening video file")
             return
-
-        self.lock.acquire()
-        ret, frame = cap.read()
+        
+        _, frame = capture.read()
         frame = cv2.resize(frame, (width, new_height), interpolation=cv2.INTER_AREA)
-        prev_frame = frame
-        frame_num = 0
 
-        while self.status == RUNNING:
-            if not ret or self.status == DISCONNECTED or self.status == ERROR:
-                print("Error reading the frames of the video")
-                self.status = ERROR
+        frame_queue = queue.Queue()
+        for frame_index in range(frame_count):
+            frame_queue.put(frame_index)
 
-            energy, plot = self.calculate_energy(frame, prev_frame, do_plot)
+        threads = []
+        lock = threading.Lock()
+        for _ in range(num_threads):
+            threads.append(threading.Thread(target=self.worker, args=(capture, frame, frame_queue, width, new_height, lock)))
 
-            # Convert frame to HSV color space
-            hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-            # Extract HUE, saturation, and brightness
-            # hue: 0-179
-            # saturation: 0-255
-            # brightness: 0-255
-            hue = hsv[:,:,0].mean()
-            saturation = hsv[:,:,1].mean()
-            brightness = hsv[:,:,2].mean()
-            self.queue.put((frame_num, energy, hue, saturation, brightness, plot))
+        for thread in threads:
+            thread.start()
 
+        for thread in threads:
+            thread.join()
+
+        self.status = FINISHED
+        capture.release()
+
+    def worker(self, capture, prev_frame, frame_queue: queue.Queue, width: int, height: int, lock: threading.Lock):
+        """
+        Creates a thread and extracts information from the next available frame in the queue.
+
+        Args:
+            capture: The video stream.
+            prev_frame: The previous frame.
+            frame_queue (Queue): The queue of frames to be extracted.
+            width (int): The width to scale the frame.
+            height (int): The height to scale the frame.
+            lock (Lock): The lock to allow only one access at a time to the capture.
+        """
+        while True:
+            try:
+                frame_index = frame_queue.get(block=False)
+            except queue.Empty:
+                break
+
+            with lock:
+                capture.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
+                success, frame = capture.read()
+
+            if not success:
+                break
+            
+            frame = cv2.resize(frame, (width, height), interpolation=cv2.INTER_AREA)
+            self.extract_properties(frame, prev_frame, frame_index)
             prev_frame = frame
-            frame_num += 1
-            ret, frame = cap.read()
-            frame = cv2.resize(frame, (width, new_height), interpolation=cv2.INTER_AREA)
 
-            # Break the loop if no more frames
-            if not ret:
-                self.status = FINISHED
+    def extract_properties(self, frame, prev_frame, frame_index: int):
+        """
+        Extract the properties from the current frame.
 
-        cap.release()
-        self.lock.release()
+        Args:
+            prev_frame: The previous frame.
+            frame: The current frame.
+        """
+        energy = self.calculate_energy(frame, prev_frame)
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        # Extract HUE, saturation, and brightness
+        # hue: 0-179
+        # saturation: 0-255
+        # brightness: 0-255
+        hue = hsv[:,:,0].mean()
+        saturation = hsv[:,:,1].mean()
+        brightness = hsv[:,:,2].mean()
 
-    def calculate_energy(self, frame, prev_frame, do_plot):
+        with threading.Lock():
+            self.queue.put((frame_index, energy, hue, saturation, brightness))
+
+    def calculate_energy(self, frame, prev_frame):
         """
         Calculate the energy from the previous frame and the current frame.
 
         Args:
             frame: The current frame.
             prev_frame: The previous frame.
-            do_plot: Show the movement flow image.
         """
         # Convert frames to grayscale
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -105,19 +139,8 @@ class ExtractVideoProperties:
         flow = cv2.calcOpticalFlowFarneback(prev_gray, gray, None, 0.5, 3, 15, 3, 5, 1.2, 0)
         # Calculate the energy as the sum of squared magnitudes of the flow vectors
         energy = np.sum(flow[..., 0]**2 + flow[..., 1]**2)
-        plot = None
-
-        if do_plot:
-            magnitude, angle = cv2.cartToPolar(flow[..., 0], flow[..., 1])
-
-            # Create an RGB image to visualize the flow
-            hsv1 = np.zeros_like(prev_frame)
-            hsv1[..., 1] = 255
-            hsv1[..., 0] = angle * 180 / np.pi / 2
-            hsv1[..., 2] = cv2.normalize(magnitude, None, 0, 255, cv2.NORM_MINMAX)
-            plot = cv2.cvtColor(hsv1, cv2.COLOR_HSV2BGR)
-
-        return energy, plot
+        return energy
+    
     
     def shutdown(self):
         """
@@ -144,12 +167,10 @@ class ExtractVideoProperties:
 if __name__ == "__main__":
     path = 'example_videos/v1.mp4'
     video_extractor = ExtractVideoProperties()
-    video_extractor.start_extracting(path, 320)
+    video_extractor.start_extracting(path, 320, 4)
+
     while video_extractor.status == RUNNING:
         values = video_extractor.get_values()
         if values is not None:
-            frame_num, energy, hue, saturation, brightness, plot = values
-            if plot is not None:
-                plt.imshow(plot)
-                plt.pause(0.001)
+            frame_num, energy, hue, saturation, brightness = values
             print(f"Frame {frame_num}: Energy={energy}, HUE={hue}, Saturation={saturation}, Brightness={brightness}")
