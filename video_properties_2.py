@@ -1,27 +1,21 @@
-from collections.abc import Callable, Iterable, Mapping
-from typing import Any
 import cv2
 import numpy as np
-import threading
-import queue
-from MusicGeneration import MusicGenerator
-
 from threading import Thread
 import time
 import colorsys
 import multiprocessing
 
-DISCONNECTED = 0
-RUNNING = 1
-FINISHED = 2
-ERROR = 3
-CANCELED = 4
 
 
 
+class VideoPropertiesExtractor:
+	DISCONNECTED = 0
+	RUNNING = 1
+	FINISHED = 2
+	ERROR = 3
+	CANCELED = 4
 
 
-class ExctractVideoProperties:
 	def __init__(self, video_path: str, height: int) -> None:
 		"""
 		Runs the thread for capturing and processing frames from the video.
@@ -30,8 +24,7 @@ class ExctractVideoProperties:
 			video_path (str): The path of the video stream.
 			height (int): The height which the video will be resized to.
 		"""
-		self.timer = ComponentTimer()
-		self.status = RUNNING
+		self.status = VideoPropertiesExtractor.RUNNING
 		
 		self.capture = cv2.VideoCapture(video_path)
 		frame_count = int(self.capture.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -43,7 +36,7 @@ class ExctractVideoProperties:
 		self.n_pixels = height * self.width
 
 		if not self.capture.isOpened():
-			self.status = ERROR
+			self.status = VideoPropertiesExtractor.ERROR
 			print("Error opening video file")
 			return
 		
@@ -53,15 +46,14 @@ class ExctractVideoProperties:
 		# thread constants
 		self.n_threads = multiprocessing.cpu_count()
 		self.th_length = self.width // self.n_threads
-		self.times = {}
 	
 
 	def capture_frame(self):
 		success, frame = self.capture.read()
-		#frame = cv2.resize(frame, (self.width, self.height), interpolation=cv2.INTER_AREA)
+		frame = cv2.resize(frame, (self.width, self.height), interpolation=cv2.INTER_AREA)
 		gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 		if not success:
-			self.status = FINISHED
+			self.status = VideoPropertiesExtractor.FINISHED
 		return frame, gray
 	
 	
@@ -72,10 +64,7 @@ class ExctractVideoProperties:
 
 		threads = [None] * n_threads
 		energy = [0.0] * n_threads
-		self.timer.start("th_main")
 
-
-		#print(gray[:,0:2])
 
 		for i in range(n_threads):
 			threads[i] = Thread(target=self.th_energy, args=(gray, self.prev_gray, self.width, self.th_length, energy, i))
@@ -88,13 +77,12 @@ class ExctractVideoProperties:
 			)
 		self.next_frame, self.next_gray = self.capture_frame()
 
-		self.timer.time("th_main")
-
 		for i in range(n_threads):
 			threads[i].join()
 		
 		self.prev_frame = frame
 		self.prev_gray = gray
+
 		return np.mean(energy), h, s, v
 	
 
@@ -106,42 +94,18 @@ class ExctractVideoProperties:
 			frame: The current frame.
 			prev_frame: The previous frame.
 		"""
-		th_name = "th"+str(i)
-		self.timer.start(th_name)
 		start = length * i
 		end = start+length if i != self.n_threads-1 else width-1
-		#print(f"th:{i}\t{start}\t{end}")
 
 		# Calculate optical flow using Lucas-Kanade method
-		
 		flow = cv2.calcOpticalFlowFarneback(prev_gray[:,start:end], gray[:,start:end], None, 0.5, 3, 15, 3, 5, 1.2, 0)
 		# Calculate the energy as the average of the magnitude of the flow vectors
-	#	if i == 0:
-	#		print(gray[:,start:end])
-	#		print(f"len_flow: {len(flow[0])}, len_gray: {len(gray)}")
 		energy[i] = np.mean(np.sqrt(flow[..., 0]**2 + flow[..., 1]**2))
-		#print(f"th({i}):\t{temp_energy}")
-		self.timer.time(th_name)
-		#print(f"thread ({i}) took {t1-t0} ns")
-
-	
-	def extract_properties(self, frame) -> tuple:
-		"""
-		Extract the properties from the current frame.
-
-		Args:
-			prev_frame: The previous frame.
-			frame: The current frame.
-		"""
-		b = frame[:,:,0].mean()
-		g = frame[:,:,1].mean()
-		r = frame[:,:,2].mean()
-		hsv = colorsys.rgb_to_hsv(r/255.0, g/255.0, b/255.0)
-		return hsv
 
 
 
 
+# class to time specific parts of the code
 class ComponentTimer():
 	def __init__(self) -> None:
 		self.component = {}
@@ -191,9 +155,7 @@ if __name__ == "__main__":
 
 	for path in paths:
 		print(f"\n***** Calculating {n_frames} frames of video '{path}' *****")
-		#video_extractor = ExtractVideoProperties()
-		#video_extractor.start_extracting(path, 320, 4)
-		video_extractor = ExctractVideoProperties(path, 180)
+		video_extractor = VideoPropertiesExtractor(path, 180)
 		
 		frames = []
 		lenergy = []
@@ -202,11 +164,9 @@ if __name__ == "__main__":
 		lbrightness = []
 
 		ctimer = ComponentTimer()
-		video_extractor.ctimer = ctimer
-		#ctimer.start()
 
 		i_frames = 0
-		while video_extractor.status == RUNNING and i_frames < 100:
+		while video_extractor.status == VideoPropertiesExtractor.RUNNING and i_frames < 100:
 			ctimer.start("get_values")
 			values = video_extractor.get_values()
 			ctimer.time("get_values")
@@ -229,11 +189,8 @@ if __name__ == "__main__":
 				#print(f"Frame {i_frames}: Energy={energy}, HUE={hue}, Saturation={saturation}, Brightness={brightness}")
 				ctimer.time("main_if")
 
-		#ctimer.time()
-
 		print(ctimer.get_all_components())
 		print(f"Took {(ctimer.get_sum())/1000000000.0} seconds.")
-		#print(video_extractor.timer.get_all_components())
 
 		#with open(path + ".txt", mode="wt") as f:
 		#	f.write(str(frames))
@@ -242,11 +199,4 @@ if __name__ == "__main__":
 		print("max", max(lenergy), max(lhue), max(lsaturation), max(lbrightness))
 
 		
-
-
-#mg.update_parameters(
-#	energy/100000.0 if energy <= 100000.0 else 0,
-#	hue/180,
-#	saturation/255.0,
-#	brightness/255.0)
 
