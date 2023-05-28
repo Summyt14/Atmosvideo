@@ -2,11 +2,19 @@ import customtkinter
 import os
 import datetime
 import vlc
+import cv2
+import shutil
 from PIL import Image
 
 
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+THUMBNAILS_DIR = os.path.join(CURRENT_DIR, 'thumbnails')
+VIDEOS_DIR = os.path.join(CURRENT_DIR, 'example_videos')
+IMAGES_DIR = os.path.join(CURRENT_DIR, 'images')
+
+
 class ScrollableLabelButtonFrame(customtkinter.CTkScrollableFrame):
-    def __init__(self, master, command=None, **kwargs):
+    def __init__(self, master, command, **kwargs):
         super().__init__(master, **kwargs)
         self.grid_columnconfigure(0, weight=1)
 
@@ -15,11 +23,20 @@ class ScrollableLabelButtonFrame(customtkinter.CTkScrollableFrame):
         self.label_list = []
         self.button_list = []
 
-    def add_item(self, item, image=None):
-        label = customtkinter.CTkLabel(self, text=item, image=image, compound="left", padx=5, anchor="w")
-        button = customtkinter.CTkButton(self, text="Command", width=100, height=24)
-        if self.command is not None:
-            button.configure(command=lambda: self.command(item))
+        mp4_files = []
+
+        for root, dirs, files in os.walk(VIDEOS_DIR):
+            for filename in files:
+                if filename.endswith('.mp4'):
+                    mp4_files.append(os.path.join(root, filename))
+                    image_name = f"{os.path.splitext(filename)[0]}.jpg"
+                    self.add_item(os.path.join(root, filename), thumbnail=customtkinter.CTkImage(Image.open(os.path.join(THUMBNAILS_DIR, image_name)), size=(128, 72)))
+
+    def add_item(self, video_path, thumbnail):
+        filename = os.path.basename(video_path)
+        label = customtkinter.CTkLabel(self, text=filename.split('.')[0], image=thumbnail, compound="left", padx=10, anchor="w", wraplength=150, justify="left")
+        button = customtkinter.CTkButton(self, text="Play", width=50, height=35)
+        button.configure(command=lambda: self.command(video_path))
         label.grid(row=len(self.label_list), column=0, pady=(0, 10), sticky="w")
         button.grid(row=len(self.button_list), column=1, pady=(0, 10), padx=5)
         self.label_list.append(label)
@@ -35,23 +52,23 @@ class ScrollableLabelButtonFrame(customtkinter.CTkScrollableFrame):
                 return
             
 class PlayerControlsFrame(customtkinter.CTkFrame):
-    def __init__(self, master, vlc_instance: vlc.Instance, video_player: vlc.MediaPlayer, **kwargs):
+    def __init__(self, master, vlc_instance: vlc.Instance, video_player: vlc.MediaPlayer, saved_video_event, **kwargs):
         super().__init__(master, **kwargs)
 
         self.vlc_instance = vlc_instance
         self.video_player = video_player
+        self.saved_video_event = saved_video_event
         self.video_path = ""
-        self.current_dir = os.path.dirname(os.path.abspath(__file__))
 
         self.grid_rowconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)
         self.grid_columnconfigure(0, weight=1)
 
-        rewind_image = customtkinter.CTkImage(Image.open(os.path.join(self.current_dir, "images", "rewind.png")))
-        play_image = customtkinter.CTkImage(Image.open(os.path.join(self.current_dir, "images", "pause.png")))
-        fast_forward_image = customtkinter.CTkImage(Image.open(os.path.join(self.current_dir, "images", "fast-forward.png")))
+        rewind_image = customtkinter.CTkImage(Image.open(os.path.join(IMAGES_DIR, "rewind.png")))
+        play_image = customtkinter.CTkImage(Image.open(os.path.join(IMAGES_DIR, "pause.png")))
+        fast_forward_image = customtkinter.CTkImage(Image.open(os.path.join(IMAGES_DIR, "fast-forward.png")))
 
-        self.slider_frame = customtkinter.CTkFrame(master=self)
+        self.slider_frame = customtkinter.CTkFrame(master=self, corner_radius=0)
         self.start_time_label = customtkinter.CTkLabel(master=self.slider_frame, text=str(datetime.timedelta(seconds=0)))
         self.progress_value = customtkinter.IntVar(master=self.slider_frame)
         self.progress_slider = customtkinter.CTkSlider(master=self.slider_frame, width=550, variable=self.progress_value, from_=0, to=1, orientation="horizontal", command=self.seek)
@@ -61,8 +78,9 @@ class PlayerControlsFrame(customtkinter.CTkFrame):
         self.slider_frame.grid_columnconfigure(2, weight=1)
         self.slider_frame.grid(row=0, column=0, padx=0, pady=0, sticky="NEW")
 
-        self.buttons_frame = customtkinter.CTkFrame(master=self)
-        self.button_browse = customtkinter.CTkButton(master=self.buttons_frame, height=30, text="Browse Video", command=self.browse)
+        self.buttons_frame = customtkinter.CTkFrame(master=self, corner_radius=0)
+        self.button_browse = customtkinter.CTkButton(master=self.buttons_frame, width=50, height=30, text="Browse Video", command=self.browse)
+        self.button_save = customtkinter.CTkButton(master=self.buttons_frame, width=50, height=30, text="Save", command=self.save_video)
         self.button_rewind = customtkinter.CTkButton(master=self.buttons_frame, image=rewind_image, text="", height=30, width=30, command=lambda: self.skip(-5))
         self.button_play = customtkinter.CTkButton(master=self.buttons_frame, image=play_image, text="", height=30, width=30, command=self.play_pause)
         self.button_fast_forward = customtkinter.CTkButton(master=self.buttons_frame, image=fast_forward_image, text="", height=30, width=30, command=lambda: self.skip(5))
@@ -79,10 +97,11 @@ class PlayerControlsFrame(customtkinter.CTkFrame):
         self.end_time_label.grid(row=0, column=2, padx=10, pady=10)
 
         self.button_browse.grid(row=0, column=0, padx=10, pady=10)
-        self.button_rewind.grid(row=0, column=1, padx=10, pady=10)
-        self.button_play.grid(row=0, column=2, padx=10, pady=10)
-        self.button_fast_forward.grid(row=0, column=3, padx=10, pady=10)
-        self.volume_slider.grid(row=0, column=4, padx=10, pady=10)
+        self.button_save.grid(row=0, column=1, padx=10, pady=10)
+        self.button_rewind.grid(row=0, column=2, padx=10, pady=10)
+        self.button_play.grid(row=0, column=3, padx=10, pady=10)
+        self.button_fast_forward.grid(row=0, column=4, padx=10, pady=10)
+        self.volume_slider.grid(row=0, column=5, padx=10, pady=10)
 
         self.video_player.event_manager().event_attach(vlc.EventType.MediaPlayerTimeChanged, self.update_current_time)
         self.video_player.event_manager().event_attach(vlc.EventType.MediaPlayerEndReached, self.video_ended)
@@ -116,11 +135,16 @@ class PlayerControlsFrame(customtkinter.CTkFrame):
         self.video_player.set_time(new_time)
 
     def video_ended(self, event):
+        media = self.vlc_instance.media_new(self.video_path)
+        self.video_player.set_media(media)
         self.progress_slider.set(0)
         self.start_time_label.configure(text=str(datetime.timedelta(seconds=0)))
 
-    def browse(self):
-        self.video_path = customtkinter.filedialog.askopenfilename()
+    def browse(self, video_path=None):
+        if video_path:
+            self.video_path = video_path
+        else:
+            self.video_path = customtkinter.filedialog.askopenfilename()
         if self.video_path:
             media = self.vlc_instance.media_new(self.video_path)
             self.video_player.set_media(media)
@@ -130,10 +154,40 @@ class PlayerControlsFrame(customtkinter.CTkFrame):
     def play_pause(self):
         if self.video_path == "":
             return
-        if self.video_player.can_pause():
+        if self.video_player.is_playing():
             self.video_player.pause()
         else:
             self.video_player.play()
+
+    def save_video(self):
+        if not os.path.exists(VIDEOS_DIR):
+            os.makedirs(VIDEOS_DIR)
+        
+        if self.video_path == "":
+            return
+        filename = os.path.basename(self.video_path)
+        destination_file_path = os.path.join(VIDEOS_DIR, filename)
+        shutil.copyfile(self.video_path, destination_file_path)
+        print(f"File copied to: {destination_file_path}")
+
+        self.create_thumbnail(self.video_path)
+        self.saved_video_event(self.video_path)
+
+    def create_thumbnail(self, video_path):
+        if not os.path.exists(THUMBNAILS_DIR):
+            os.makedirs(THUMBNAILS_DIR)
+
+        filename = os.path.basename(video_path)
+        if filename.endswith('.mp4'):
+            thumbnail_path = os.path.join(THUMBNAILS_DIR, f"{os.path.splitext(filename)[0]}.jpg")
+            video_capture = cv2.VideoCapture(video_path)
+            success, frame = video_capture.read()
+            if success:
+                cv2.imwrite(thumbnail_path, frame)
+                print(f"Thumbnail saved for {filename}")
+            else:
+                print(f"Failed to extract thumbnail for {filename}")
+            video_capture.release()
 
 
 class App(customtkinter.CTk):
@@ -142,7 +196,6 @@ class App(customtkinter.CTk):
 
         self.title("Atmosvideo")
         self.geometry(f"{1100}x{580}")
-        self.current_dir = os.path.dirname(os.path.abspath(__file__))
 
         self.grid_rowconfigure(0, weight=1)
         self.grid_columnconfigure(0, weight=1)
@@ -158,16 +211,21 @@ class App(customtkinter.CTk):
         self.player_frame_video_player = customtkinter.CTkFrame(master=self.player_frame)
         self.player_frame_video_player.grid(row=0, column=0, padx=0, pady=0, sticky="NSEW")
 
-        self.controls_frame = PlayerControlsFrame(master=self.player_frame, vlc_instance=self.vlc_instance, video_player=self.video_player, corner_radius=0, fg_color="transparent")
+        self.controls_frame = PlayerControlsFrame(master=self.player_frame, vlc_instance=self.vlc_instance, video_player=self.video_player, saved_video_event=self.saved_video_event, corner_radius=0, fg_color="transparent")
         self.controls_frame.grid(row=1, column=0, padx=0, pady=0, sticky="NEW")
         
-        self.scrollable_label_button_frame = ScrollableLabelButtonFrame(master=self, width=350, command=self.label_button_frame_event, corner_radius=0)
+        self.scrollable_label_button_frame = ScrollableLabelButtonFrame(master=self, width=350, command=self.label_button_frame_event)
         self.scrollable_label_button_frame.grid(row=0, column=1, padx=0, pady=10, sticky="nsew")
-        for i in range(5):
-            self.scrollable_label_button_frame.add_item(f"image and item {i}", image=customtkinter.CTkImage(Image.open(os.path.join(self.current_dir, "images", "chat_light.png"))))
+           
 
-    def label_button_frame_event(self, item):
-        print(f"label button frame clicked: {item}")
+    def label_button_frame_event(self, video_path):
+        self.controls_frame.browse(video_path)
+        self.controls_frame.play_pause()
+
+    def saved_video_event(self, video_path):
+        filename = os.path.basename(video_path)
+        image_name = f"{os.path.splitext(filename)[0]}.jpg"
+        self.scrollable_label_button_frame.add_item(video_path, thumbnail=customtkinter.CTkImage(Image.open(os.path.join(THUMBNAILS_DIR, image_name)), size=(128, 72)))
 
     def run(self):
         self.video_player.set_hwnd(self.player_frame_video_player.winfo_id())
