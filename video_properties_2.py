@@ -9,6 +9,7 @@ import multiprocessing
 
 
 class VideoPropertiesExtractor:
+	# status codes
 	DISCONNECTED = 0
 	RUNNING = 1
 	FINISHED = 2
@@ -18,7 +19,7 @@ class VideoPropertiesExtractor:
 
 	def __init__(self, video_path: str, height: int) -> None:
 		"""
-		Runs the thread for capturing and processing frames from the video.
+		Creates an object for video properties extraction, and initializes its functionality.
 
 		Args:
 			video_path (str): The path of the video stream.
@@ -33,7 +34,6 @@ class VideoPropertiesExtractor:
 		cap_height = int(self.capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
 		self.height = height
 		self.width = int(height * cap_width / cap_height)
-		self.n_pixels = height * self.width
 
 		if not self.capture.isOpened():
 			self.status = VideoPropertiesExtractor.ERROR
@@ -48,7 +48,14 @@ class VideoPropertiesExtractor:
 		self.th_length = self.width // self.n_threads
 	
 
-	def capture_frame(self):
+	def capture_frame(self) -> tuple:
+		"""
+		Captures the next video frame, resizes it, and converts it to grayscale
+
+		Return:
+			frame: the next resized frame in color
+			gray: the next resized frame in grayscale
+		"""
 		success, frame = self.capture.read()
 		frame = cv2.resize(frame, (self.width, self.height), interpolation=cv2.INTER_AREA)
 		gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -58,6 +65,15 @@ class VideoPropertiesExtractor:
 	
 	
 	def get_values(self) -> tuple:
+		"""
+		Captures the next video frame, resizes it, and converts it to grayscale
+
+		Return:
+			energy: the avergae energy value in the frame
+			h: the average hue of the frame
+			s: the average saturation of the frame
+			v: the average value of the frame
+		"""
 		n_threads = self.n_threads
 		frame = self.next_frame
 		gray = self.next_gray
@@ -91,8 +107,12 @@ class VideoPropertiesExtractor:
 		Calculate the energy from the previous frame and the current frame.
 
 		Args:
-			frame: The current frame.
-			prev_frame: The previous frame.
+			gray: The current frame in grayscale.
+			prev_gray: The previous frame in grayscale.
+			width: The width of the frame.
+			length: The amount of columns of the frame to be processed by the thread
+			energy: An array of floats where the result will be written in energy[i]
+			i: The number of the thread
 		"""
 		start = length * i
 		end = start+length if i != self.n_threads-1 else width-1
