@@ -4,6 +4,7 @@ import datetime
 import vlc
 import cv2
 import shutil
+import threading
 from PIL import Image
 
 
@@ -113,6 +114,16 @@ class PlayerControlsFrame(customtkinter.CTkFrame):
         self.progress_slider.configure(to=duration)
         self.progress_value.set(int(self.video_player.get_time()))
 
+    def video_ended(self, event):
+        self.progress_slider.set(0)
+        self.start_time_label.configure(text=str(datetime.timedelta(seconds=0)))
+        restart_thread = threading.Thread(target=self.restart_video)
+        restart_thread.start()
+
+    def restart_video(self):
+        self.video_player.stop()
+        self.video_player.set_time(0)
+
     def set_volume_throttled(self, volume):
         if not self.volume_update_pending:
             self.volume_update_pending = True
@@ -125,20 +136,20 @@ class PlayerControlsFrame(customtkinter.CTkFrame):
     def seek(self, value):
         if self.video_path == "":
             return
-        self.video_player.set_time(int(value))
+        if not self.video_player.is_playing():
+            self.video_player.play()
+            self.video_player.set_time(int(value))
+        else:
+            self.video_player.set_time(int(value))
 
     def skip(self, value):
         if self.video_path == "":
             return
+        if not self.video_player.is_playing():
+            self.video_player.play()
         current_time = self.video_player.get_time()
         new_time = current_time + (value * 1000)
         self.video_player.set_time(new_time)
-
-    def video_ended(self, event):
-        media = self.vlc_instance.media_new(self.video_path)
-        self.video_player.set_media(media)
-        self.progress_slider.set(0)
-        self.start_time_label.configure(text=str(datetime.timedelta(seconds=0)))
 
     def browse(self, video_path=None):
         if video_path:
