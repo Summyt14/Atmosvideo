@@ -60,14 +60,18 @@ class PlayerControlsFrame(customtkinter.CTkFrame):
         self.video_player = video_player
         self.saved_video_event = saved_video_event
         self.video_path = ""
+        self.last_volume = 100
 
         self.grid_rowconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)
         self.grid_columnconfigure(0, weight=1)
 
-        rewind_image = customtkinter.CTkImage(Image.open(os.path.join(IMAGES_DIR, "rewind.png")))
-        play_image = customtkinter.CTkImage(Image.open(os.path.join(IMAGES_DIR, "pause.png")))
-        fast_forward_image = customtkinter.CTkImage(Image.open(os.path.join(IMAGES_DIR, "fast-forward.png")))
+        self.rewind_image = customtkinter.CTkImage(Image.open(os.path.join(IMAGES_DIR, "rewind.png")))
+        self.play_image = customtkinter.CTkImage(Image.open(os.path.join(IMAGES_DIR, "pause.png")))
+        self.fast_forward_image = customtkinter.CTkImage(Image.open(os.path.join(IMAGES_DIR, "fast-forward.png")))
+        self.volume_on_image = customtkinter.CTkImage(Image.open(os.path.join(IMAGES_DIR, "high-volume.png")))
+        self.volume_off_image = customtkinter.CTkImage(Image.open(os.path.join(IMAGES_DIR, "mute.png")))
+        self.generate_image = customtkinter.CTkImage(Image.open(os.path.join(IMAGES_DIR, "generate.png")))
 
         self.slider_frame = customtkinter.CTkFrame(master=self, corner_radius=0)
         self.start_time_label = customtkinter.CTkLabel(master=self.slider_frame, text=str(datetime.timedelta(seconds=0)))
@@ -82,28 +86,37 @@ class PlayerControlsFrame(customtkinter.CTkFrame):
         self.buttons_frame = customtkinter.CTkFrame(master=self, corner_radius=0)
         self.button_browse = customtkinter.CTkButton(master=self.buttons_frame, width=50, height=30, text="Browse Video", command=self.browse)
         self.button_save = customtkinter.CTkButton(master=self.buttons_frame, width=50, height=30, text="Save", command=self.save_video)
-        self.button_rewind = customtkinter.CTkButton(master=self.buttons_frame, image=rewind_image, text="", height=30, width=30, command=lambda: self.skip(-5))
-        self.button_play = customtkinter.CTkButton(master=self.buttons_frame, image=play_image, text="", height=30, width=30, command=self.play_pause)
-        self.button_fast_forward = customtkinter.CTkButton(master=self.buttons_frame, image=fast_forward_image, text="", height=30, width=30, command=lambda: self.skip(5))
-        self.volume_value = customtkinter.IntVar(master=self.buttons_frame)
-        self.volume_slider = customtkinter.CTkSlider(master=self.buttons_frame, width=100, variable=self.volume_value, from_=0, to=100, orientation="horizontal", command=self.set_volume_throttled)
+        self.button_rewind = customtkinter.CTkButton(master=self.buttons_frame, image=self.rewind_image, text="", height=30, width=30, command=lambda: self.skip(-5))
+        self.button_play = customtkinter.CTkButton(master=self.buttons_frame, image=self.play_image, text="", height=30, width=30, command=self.play_pause)
+        self.button_fast_forward = customtkinter.CTkButton(master=self.buttons_frame, image=self.fast_forward_image, text="", height=30, width=30, command=lambda: self.skip(5))
+        self.button_generate = customtkinter.CTkButton(master=self.buttons_frame, image=self.generate_image, text="", height=30, width=30, command=lambda: self.generate)
+
+        self.volume_frame = customtkinter.CTkFrame(master=self.buttons_frame, fg_color="transparent")
+        self.button_volume = customtkinter.CTkButton(master=self.volume_frame, image=self.volume_on_image, text="", height=30, width=30, command=lambda: self.volume_on_off())
+        self.volume_value = customtkinter.IntVar(master=self.volume_frame)
+        self.volume_slider = customtkinter.CTkSlider(master=self.volume_frame, width=100, variable=self.volume_value, from_=0, to=100, orientation="horizontal", command=self.set_volume_throttled)
         self.volume_slider.set(100)
         self.volume_update_delay = 500  # Delay in milliseconds between volume updates
         self.volume_update_pending = False  # Flag to track pending volume updates
         self.volume_update_timer = None
-        self.buttons_frame.grid(row=1, column=0, padx=0, pady=0, sticky="NEW")
 
+        self.buttons_frame.grid(row=1, column=0, padx=0, pady=0, sticky="NEW")
         self.start_time_label.grid(row=0, column=0, padx=10, pady=10)
         self.progress_slider.grid(row=0, column=1, padx=10, pady=10)
         self.end_time_label.grid(row=0, column=2, padx=10, pady=10)
-
         self.button_browse.grid(row=0, column=0, padx=10, pady=10)
         self.button_save.grid(row=0, column=1, padx=10, pady=10)
         self.button_rewind.grid(row=0, column=2, padx=10, pady=10)
         self.button_play.grid(row=0, column=3, padx=10, pady=10)
         self.button_fast_forward.grid(row=0, column=4, padx=10, pady=10)
-        self.volume_slider.grid(row=0, column=5, padx=10, pady=10)
+        self.volume_frame.grid(row=0, column=5, padx=0, pady=10)
+        self.button_generate.grid(row=0, column=6, padx=10, pady=10)
+        self.button_volume.grid(row=0, column=0, padx=10, pady=10)
 
+        self.volume_frame.bind("<Enter>", self.show_volume_slider)
+        self.volume_frame.bind("<Leave>", self.hide_volume_slider)
+        self.volume_slider.bind("<Enter>", self.show_volume_slider)
+        self.button_volume.bind("<Enter>", self.show_volume_slider)
         self.video_player.event_manager().event_attach(vlc.EventType.MediaPlayerTimeChanged, self.update_current_time)
         self.video_player.event_manager().event_attach(vlc.EventType.MediaPlayerEndReached, self.video_ended)
 
@@ -124,13 +137,30 @@ class PlayerControlsFrame(customtkinter.CTkFrame):
         self.video_player.stop()
         self.video_player.set_time(0)
 
+    def volume_on_off(self):
+        if self.video_player.audio_get_volume() > 0:
+            self.volume_value.set(0)
+            self.button_volume.configure(image=self.volume_off_image)
+        else:
+            if self.last_volume == 0:
+                self.last_volume = 100
+            self.volume_value.set(self.last_volume)
+            self.button_volume.configure(image=self.volume_on_image)
+        self.video_player.audio_set_volume(int(self.volume_value.get()))
+
     def set_volume_throttled(self, volume):
         if not self.volume_update_pending:
             self.volume_update_pending = True
             self.after(self.volume_update_delay, self.update_volume)
 
     def update_volume(self):
-        self.video_player.audio_set_volume(int(self.volume_value.get()))
+        new_volume = int(self.volume_value.get())
+        if new_volume > 0:
+            self.button_volume.configure(image=self.volume_on_image)
+        else:
+            self.button_volume.configure(image=self.volume_off_image)
+        self.last_volume = new_volume
+        self.video_player.audio_set_volume(new_volume)
         self.volume_update_pending = False
 
     def seek(self, value):
@@ -199,6 +229,18 @@ class PlayerControlsFrame(customtkinter.CTkFrame):
             else:
                 print(f"Failed to extract thumbnail for {filename}")
             video_capture.release()
+
+    def show_volume_slider(self, event):
+        self.volume_slider.grid(row=0, column=1, padx=10, pady=10)
+
+    def hide_volume_slider(self, event):
+        if event.widget != self.volume_slider and event.widget != self.button_volume and event.widget != self.volume_frame:
+            self.volume_slider.grid_forget()
+
+    def generate(self):
+        if self.video_path != "":
+            #TODO generate music
+            pass
 
 
 class App(customtkinter.CTk):
