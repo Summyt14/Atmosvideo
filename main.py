@@ -1,3 +1,4 @@
+from typing import Optional, Tuple, Union
 import customtkinter
 import os
 import datetime
@@ -72,6 +73,7 @@ class PlayerControlsFrame(customtkinter.CTkFrame):
         self.volume_on_image = customtkinter.CTkImage(Image.open(os.path.join(IMAGES_DIR, "high-volume.png")))
         self.volume_off_image = customtkinter.CTkImage(Image.open(os.path.join(IMAGES_DIR, "mute.png")))
         self.generate_image = customtkinter.CTkImage(Image.open(os.path.join(IMAGES_DIR, "generate.png")))
+        self.setting_image = customtkinter.CTkImage(Image.open(os.path.join(IMAGES_DIR, "setting.png")))
 
         self.slider_frame = customtkinter.CTkFrame(master=self, corner_radius=0)
         self.start_time_label = customtkinter.CTkLabel(master=self.slider_frame, text=str(datetime.timedelta(seconds=0)))
@@ -90,6 +92,7 @@ class PlayerControlsFrame(customtkinter.CTkFrame):
         self.button_play = customtkinter.CTkButton(master=self.buttons_frame, image=self.play_image, text="", height=30, width=30, command=self.play_pause)
         self.button_fast_forward = customtkinter.CTkButton(master=self.buttons_frame, image=self.fast_forward_image, text="", height=30, width=30, command=lambda: self.skip(5))
         self.button_generate = customtkinter.CTkButton(master=self.buttons_frame, image=self.generate_image, text="", height=30, width=30, command=lambda: self.generate)
+        self.button_settings = customtkinter.CTkButton(master=self.buttons_frame, image=self.setting_image, text="", height=30, width=30, command=lambda: self.settings())
 
         self.volume_frame = customtkinter.CTkFrame(master=self.buttons_frame, fg_color="transparent")
         self.button_volume = customtkinter.CTkButton(master=self.volume_frame, image=self.volume_on_image, text="", height=30, width=30, command=lambda: self.volume_on_off())
@@ -111,6 +114,7 @@ class PlayerControlsFrame(customtkinter.CTkFrame):
         self.button_fast_forward.grid(row=0, column=4, padx=10, pady=10)
         self.volume_frame.grid(row=0, column=5, padx=0, pady=10)
         self.button_generate.grid(row=0, column=6, padx=10, pady=10)
+        self.button_settings.grid(row=0, column=7, padx=10, pady=10)
         self.button_volume.grid(row=0, column=0, padx=10, pady=10)
 
         self.volume_frame.bind("<Enter>", self.show_volume_slider)
@@ -189,6 +193,7 @@ class PlayerControlsFrame(customtkinter.CTkFrame):
         if self.video_path:
             media = self.vlc_instance.media_new(self.video_path)
             self.video_player.set_media(media)
+            self.video_player.set_nsobject
             self.progress_slider.configure(from_=0, to=1)
             self.progress_value.set(0)
 
@@ -200,19 +205,23 @@ class PlayerControlsFrame(customtkinter.CTkFrame):
         else:
             self.video_player.play()
 
+    def settings(self):
+        popup = PopupSettings(self.master.master)
+        popup.place(relx=.5, rely=.5, anchor="center")
+
     def save_video(self):
         if not os.path.exists(VIDEOS_DIR):
             os.makedirs(VIDEOS_DIR)
         
         if self.video_path == "":
             return
-        filename = os.path.basename(self.video_path)
-        destination_file_path = os.path.join(VIDEOS_DIR, filename)
-        shutil.copyfile(self.video_path, destination_file_path)
-        print(f"File copied to: {destination_file_path}")
+        
+        file_types = [("MP4 Files", "*.mp4")]
+        destination_path = customtkinter.filedialog.asksaveasfilename(initialdir=VIDEOS_DIR, defaultextension=".mp4", filetypes=file_types)
+        print(f"File saved to: {destination_path}")
 
-        self.create_thumbnail(self.video_path)
-        self.saved_video_event(self.video_path)
+        self.create_thumbnail(destination_path)
+        self.saved_video_event(destination_path)
 
     def create_thumbnail(self, video_path):
         if not os.path.exists(THUMBNAILS_DIR):
@@ -243,6 +252,28 @@ class PlayerControlsFrame(customtkinter.CTkFrame):
             pass
 
 
+class PopupSettings(customtkinter.CTkFrame):
+    def __init__(self, master, **kwargs):
+        overlay_frame = customtkinter.CTkFrame(master, bg_color='transparent', fg_color=None)
+        overlay_frame.place(x=0, y=0, relwidth=1, relheight=1)
+        overlay_frame.lift()
+
+        super().__init__(master, corner_radius=10, fg_color="transparent", border_color="black", **kwargs)
+        title = customtkinter.CTkLabel(master=self, text="Settings", font=("Helvetica", 16))
+
+
+        button_close = customtkinter.CTkButton(master=self, text="Close", command=lambda: self.close_popup(overlay_frame, self))
+
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)
+
+        title.grid(row=0, column=0, columnspan=2)
+        button_close.grid(row=3, column=2, sticky="ew", padx=10, pady=10)
+        
+    def close_popup(self, overlay_frame, popup_frame):
+        overlay_frame.destroy()
+        popup_frame.destroy()
+
 class App(customtkinter.CTk):
     def __init__(self):
         super().__init__()
@@ -259,7 +290,7 @@ class App(customtkinter.CTk):
         self.player_frame.grid_columnconfigure(0, weight=1)
         self.player_frame.grid(row=0, column=0, padx=10, pady=10, sticky="NSEW")
 
-        self.vlc_instance = vlc.Instance()
+        self.vlc_instance = vlc.Instance("--vout=avcodec")
         self.video_player = self.vlc_instance.media_player_new()
         self.player_frame_video_player = customtkinter.CTkFrame(master=self.player_frame)
         self.player_frame_video_player.grid(row=0, column=0, padx=0, pady=0, sticky="NSEW")
