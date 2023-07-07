@@ -5,6 +5,11 @@ import sched
 import numpy as np
 import time
 
+from pyaudio import PyAudio
+from pydub import AudioSegment
+
+
+
 
 
 class RoundBuffer():
@@ -36,13 +41,12 @@ class Atmosvideo():
 	ERROR = 3
 	CANCELED = 4
 
-	def __init__(self, live=True):
+	def __init__(self, sample_rate=44100, live=True):
 		"""
 		Creates an atmosvideo object and initializes its components.
 		"""
-		self.music = MusicGenerator(live)
+		self.music = MusicGenerator(sample_rate, live)
 		self.video = VideoPropertiesExtractor(180)
-		self.scheduler = sched.scheduler()
 		self.timer = ComponentTimer()
 		self.status = Atmosvideo.DISCONNECTED
 		self.properties = (Property(), Property(), Property(), Property())
@@ -56,41 +60,35 @@ class Atmosvideo():
 		"""
 		self.i_frame = 0
 		self.video.load(video_path)
-		Thread(target=self.music.start).start()
 		self.frame_time = 1/self.video.fps
 		self.timer.start("atmosvideo")
 		self.status = Atmosvideo.RUNNING
 		self.force_update = True
-		self.force_last_time = time.time_ns()
-
-	"""
-		
-
-		Args:
-			video_path (str): The path of the video stream.
-			height (int): The height which the video will be resized to.
-	"""
-	def start(self):
-		self.scheduled_event = self.scheduler.enter(self.frame_time, 1, self.run)
-		Thread(target=self.scheduler.run).start()
-
+		self.force_last_sample = 0
+		self.samples_done = 0
 	
-	def run(self):
-		self.scheduled_event = self.scheduler.enter(self.frame_time, 1, self.run)
-		self.frame()
-		self.update_parameters(self.video.values)
+	def start(self):
+		nsamples_frame = round(self.music.samplerate/self.video.fps)
+		print("samples per frame", nsamples_frame)
+		samples = bytearray()
+		while(self.status == Atmosvideo.RUNNING):
+			self.frame()
+			self.update_parameters(self.video.values)
+			samples.extend(self.music.get_samples(nsamples_frame))
+			self.samples_done += nsamples_frame
+		
+		print("samples done: " + str(self.samples_done))
+		return bytes(samples)
 
 	def frame(self):
 		self.i_frame += 1
 		running = self.video.step()
 		e, h, s, v = self.video.values
-		print("Frame {:5d}: Energy: {:.3f}, Hue: {:.3f}, Saturation: {:.3f}, Value: {:.3f}".format(self.i_frame, e, h, s, v))
+		#print("Frame {:5d}: Energy: {:.3f}, Hue: {:.3f}, Saturation: {:.3f}, Value: {:.3f}".format(self.i_frame, e, h, s, v))
 		if not running:
 			self.timer.time("atmosvideo")
-			self.scheduler.cancel(self.scheduled_event)
 			print(f"Took {self.timer.get('atmosvideo')/1_000_000_000.0} seconds")
 			self.status = Atmosvideo.FINISHED
-			self.music.do_stop = True
 	
 
 
@@ -101,15 +99,11 @@ class Atmosvideo():
 		if not self.properties[0].buffer.full:
 			return
 		
-		if time.time_ns() - self.force_last_time > 4 * 1_000_000_000.0:
-			self.force_update = True
-
-		if self.force_update:
+		if self.force_update or self.samples_done - self.force_last_sample > 4 * self.music.samplerate:
 			self.force_update = False
 			self.maybe_set_parameters(0.05)
-			return
-	
-		self.maybe_set_parameters(0.10)
+		else:
+			self.maybe_set_parameters(0.10)
 
 
 	def maybe_set_parameters(self, distinction):
@@ -124,7 +118,7 @@ class Atmosvideo():
 
 
 	def set_parameters(self, parameters):
-		self.force_last_time = time.time_ns()
+		self.force_last_sample = self.samples_done
 		for i in range(4):
 			if parameters[i]:
 				self.properties[i].last_value = parameters[i]
@@ -151,7 +145,7 @@ class Atmosvideo():
 			new_bpm = energy * 110 + 50
 			old_bpm = self.music.bpm
 			if abs(new_bpm - old_bpm) > old_bpm*0.2:
-				print("changing_bpm", new_bpm)
+				#print("changing_bpm", new_bpm)
 				self.music.setBPM(new_bpm)
 				pass
 			
@@ -205,7 +199,7 @@ class Atmosvideo():
 		# 
 		# the volume is adjusted based on the instrument to keep the volume leveled
 		if value_p or energy_p:
-			print("actual energy", energy)
+			#print("actual energy", energy)
 			if value < 1/3:
 				if energy < 1/6:
 					self.music.synth.changeInstrument(self.music.channel["chords"],17, 89) # pad
@@ -264,14 +258,49 @@ class Atmosvideo():
 
 
 if __name__ == "__main__":
-	path = 'example_videos/v1.mp4'
 
-	atmos = Atmosvideo(live=False)
-	atmos.load(path)
-	time.sleep(3)
-	atmos.start()
+	video_name = "v7" # name of the video
+	sample_rate = 44100  # Sample rate in Hz	
+	
+	def play_audio(samples, sample_rate):
+		p = PyAudio()
 
-	Thread(target=atmos.music.start).start()
+		stream = p.open(format=p.get_format_from_width(2),
+						channels=2,
+						rate=sample_rate,
+						output=True)
+
+		stream.write(samples)
+
+		stream.stop_stream()
+		stream.close()
+
+		p.terminate()
+	
+	def write_mp3(samples, sample_rate, output_file):
+		audio = AudioSegment(
+			samples,
+			frame_rate=sample_rate,
+			sample_width=2,
+			channels=2
+		)
+		audio.export(output_file, format='mp3')
+
+	
+	video_path = f'example_videos/{video_name}.mp4'
+
+	atmos = Atmosvideo(sample_rate=sample_rate, live=False)
+	atmos.load(video_path)
+	samples = atmos.start()
+
+	
+	# Play the audio sample
+	#play_audio(samples, sample_rate)
+
+	output_file = f'sound_output/{video_name}.mp3'
+
+	# Write the audio sample to an MP3 file
+	write_mp3(samples, sample_rate, output_file)
 
 
 	

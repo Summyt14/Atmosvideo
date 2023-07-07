@@ -1,12 +1,7 @@
 import random
-import time
 import fluidsynth
 import math
-from sched import scheduler
-import ast
 from pydub import AudioSegment
-
-from threading import Thread
 
 import numpy
 from pyaudio import PyAudio
@@ -17,7 +12,9 @@ class Synth():
 	def __init__(self, samplerate=44100) -> None:
 		fs = fluidsynth.Synth(gain=2.0, samplerate=samplerate)
 		# select instruments
-		self.sfid = fs.sfload("ColomboGMGS2.sf2")
+		soundfont_path = "ColomboGMGS2.sf2"
+		self.sfid = fs.sfload(soundfont_path)
+		assert self.sfid >= 0, f"Couldn't find soundfont (\"{soundfont_path}\")"
 
 		self.fs = fs
 
@@ -25,15 +22,9 @@ class Synth():
 		# 0, 107 - koto
 		# 0, 40 - violin
 		self.changeInstrument(0, 17, 89)
-		self.changeInstrument(1, 0,104)
-	
-	def start(self):
-		self.fs.start(driver="pulseaudio")
+		self.changeInstrument(1, 0, 104)
 
-	
 	def changeInstrument(self, channel:int, bank:int, instrument:int):
-		set_sfid, set_bank, set_inst = self.fs.program_info(channel)
-		#if set_bank != bank and set_inst != instrument:
 		self.fs.program_select(channel, self.sfid, bank, instrument)
 
 
@@ -41,9 +32,6 @@ class Synth():
 
 
 class MusicGenerator():
-
-	scheduler = scheduler()
-
 	# scales are defined in semitones
 	scales = {
 		"maj": [0,2,4,5,7,9,11],
@@ -67,8 +55,8 @@ class MusicGenerator():
 		self.synth = Synth(samplerate)
 		if live:
 			self.synth.start()
-		self.melody = MelodyGenerator(self.scales[scale])
-		self.chords = ChordGenerator(self.scales[scale])
+		self.melody = MelodyGenerator(self, self.scales[scale])
+		self.chords = ChordGenerator(self, self.scales[scale])
 		self.channel = {"melody": 1, "chords": 0}
 		self.base_midi_note = 40
 		self.bpm = 120
@@ -95,7 +83,7 @@ class MusicGenerator():
 			self.melody.restart()
 			self.chords.restart()
 			self.do_restart = False
-		next_action(self)
+		next_action()
 
 	
 	def beats2time(self, beats:float):
@@ -139,7 +127,7 @@ class MusicGenerator():
 			self.melody.next_change_samples -= batchsize
 			self.chords.next_change_samples -= batchsize
 			samples_done += batchsize
-			new_samples = mg.synth.fs.get_samples(batchsize)
+			new_samples = self.synth.fs.get_samples(batchsize)
 			samples = numpy.append(samples, new_samples)
 		
 		return fluidsynth.raw_audio_string(samples)
@@ -151,8 +139,9 @@ class MusicGenerator():
 
 
 class MelodyGenerator():
-	def __init__(self, scale) -> None:
+	def __init__(self, mg:MusicGenerator, scale) -> None:
 		self.rnd:random.Random = random.Random()
+		self.mg = mg
 		self.scale = scale
 		self.subdivision_rate = 0.0
 		self.rest_rate = 0.2
@@ -161,16 +150,16 @@ class MelodyGenerator():
 		self.next_change_samples = 0
 		self.note_midi = 0
 	
-	def next(self, mg:MusicGenerator):
+	def next(self):
 		# disable preveously playing note
-		mg.synth.fs.noteoff(mg.channel["melody"], self.note_midi)
+		self.mg.synth.fs.noteoff(self.mg.channel["melody"], self.note_midi)
 
 		#calculate speed
 		musical_duration = 1.0
 		if self.rnd.random() < self.subdivision_rate:
 			musical_duration /= 2
-		duration = mg.beats2time(musical_duration)
-		self.next_change_samples = int(duration * mg.samplerate)
+		duration = self.mg.beats2time(musical_duration)
+		self.next_change_samples = int(duration * self.mg.samplerate)
 		
 		#decide if note is played or rest
 		r = self.rnd.random()
@@ -182,11 +171,11 @@ class MelodyGenerator():
 			note = math.floor((r + self.transposition) * scale_len)
 			#note_octave = note // scale_len
 			#note_index = note % scale_len
-			#note_midi = mg.base_midi_note + self.scale[note_index] + 12*note_octave
-			self.note_midi = mg.note_from_scale(self.scale, note)
+			#note_midi = self.mg.base_midi_note + self.scale[note_index] + 12*note_octave
+			self.note_midi = self.mg.note_from_scale(self.scale, note)
 			velocity = math.floor(self.volume * 127)
 
-			mg.synth.fs.noteon(mg.channel["melody"], self.note_midi, velocity)
+			self.mg.synth.fs.noteon(self.mg.channel["melody"], self.note_midi, velocity)
 	
 	def restart(self):
 		self.next_change_samples = 0
@@ -194,12 +183,12 @@ class MelodyGenerator():
 
 
 class ChordGenerator():
-	def __init__(self, scale) -> None:
+	def __init__(self, mg:MusicGenerator, scale) -> None:
 		self.rnd:random.Random = random.Random()
+		self.mg = mg
 		self.transposition = 0
 		self.scale = scale
 		self.chord_type = MusicGenerator.chord_types["triad"]
-		#self.melody = melody
 		self.arpeggio_freq = 0
 		self.beats_per_chord = 4.0
 		self.volume = 0.5
@@ -209,49 +198,50 @@ class ChordGenerator():
 		self.arpeggio_note_duration = 0
 		self.next_change_samples = 0
 
-		
-#	def mapSpeed(self, r):
-#		return 4
 	
-	def next(self, mg:MusicGenerator):
+	
+	def next(self):
 		# disable preveously playing notes
 		for note in self.notes_playing:
-			mg.synth.fs.noteoff(mg.channel["chords"], note)
+			self.mg.synth.fs.noteoff(self.mg.channel["chords"], note)
 		self.notes_playing.clear()
 
 
 		#calculate pitches
 		scale_len = len(self.scale)
 		mode = math.floor(self.rnd.random() * scale_len)
-		#self.melody.mode = mode
 
 		velocity = math.floor(self.volume * 127)
-		duration = mg.beats2time(self.beats_per_chord)
-		base_note = mg.base_midi_note + round(self.transposition * 12)
+		duration = self.mg.beats2time(self.beats_per_chord)
+		base_note = self.mg.base_midi_note + round(self.transposition * 12)
 		if self.arpeggio_freq and not self.notes_to_arpeggiate:
 			self.arpeggio_note_duration = duration / (len(self.chord_type) * self.arpeggio_freq)
 			self.current_arpeggio_note = 0
 			for i in range (0, self.arpeggio_freq):
 				for note in self.chord_type:
-					midi_note = mg.note_from_scale(self.scale, note-1 + mode + round(self.transposition*scale_len))
+					midi_note = self.mg.note_from_scale(self.scale, note-1 + mode + round(self.transposition*scale_len))
 					self.notes_to_arpeggiate.append(midi_note)
 
 		if self.notes_to_arpeggiate:
 			midi_note = self.notes_to_arpeggiate[self.current_arpeggio_note]
-			mg.synth.fs.noteon(mg.channel["chords"], midi_note, velocity)
-			self.next_change_samples = int(self.arpeggio_note_duration * mg.samplerate)
+			self.mg.synth.fs.noteon(self.mg.channel["chords"], midi_note, velocity)
+			self.notes_playing.append(midi_note)
+			self.next_change_samples = int(self.arpeggio_note_duration * self.mg.samplerate)
 			self.current_arpeggio_note += 1
 			if self.current_arpeggio_note >= len(self.notes_to_arpeggiate):
 				self.notes_to_arpeggiate.clear()
 
 		if not self.arpeggio_freq and not self.notes_to_arpeggiate:
-			self.next_change_samples = int(duration * mg.samplerate)
+			self.next_change_samples = int(duration * self.mg.samplerate)
 			for note in self.chord_type:
-				midi_note = mg.note_from_scale(self.scale, note-1 + mode)
-				mg.synth.fs.noteon(mg.channel["chords"], midi_note, velocity)
+				midi_note = self.mg.note_from_scale(self.scale, note-1 + mode)
+				self.mg.synth.fs.noteon(self.mg.channel["chords"], midi_note, velocity)
 				self.notes_playing.append(midi_note)
+			
 	
 	def restart(self):
+		for note in self.notes_playing:
+			self.mg.synth.fs.noteoff(self.mg.channel["chords"], note)
 		self.notes_playing.clear()
 		self.notes_to_arpeggiate.clear()
 		self.current_arpeggio_note = 0
@@ -311,7 +301,6 @@ if __name__ == "__main__":
 	# Write the audio sample to an MP3 file
 	write_mp3(samples, sample_rate, output_file)
 
-
 	# Play the audio sample
-	play_audio(samples, sample_rate)
+	#play_audio(samples, sample_rate)
 
