@@ -7,7 +7,7 @@ import threading
 import platform
 from PIL import Image
 import tempfile
-from MusicGeneration import *
+from atmosvideo import *
 from moviepy.editor import VideoFileClip, AudioFileClip
 import wave
 
@@ -287,17 +287,17 @@ class PlayerControlsFrame(customtkinter.CTkFrame):
             self.play_pause()
             self.popup_generating = PopupGenerating(self.master.master, self.done_generating)
             self.popup_generating.place(relx=.5, rely=.5, anchor="center")
-            create_audio_thread = threading.Thread(target=self.create_and_merge_audio, args=[self.done_generating])
+            create_audio_thread = threading.Thread(target=self.create_and_merge_audio, args=[self.popup_generating, self.done_generating])
             create_audio_thread.start()
             
 
-    def create_and_merge_audio(self, callback):
+    def create_and_merge_audio(self, popup_generating, callback):
         sample_rate = 44100
-        duration = self.video_player.get_length() // 1000
-        print(duration)
-        mg = MusicGenerator(samplerate=44100, live=False)
-        samples = mg.get_samples(sample_rate * duration)
+        atmos = Atmosvideo(sample_rate=sample_rate, live=False)
+        atmos.load(self.video_path)
+        samples = atmos.start()
         temp_audio_fd, temp_audio_path = tempfile.mkstemp(suffix='.wav')
+        popup_generating.title.configure(text="Merging audio to video...")
 
         with open(temp_audio_fd, 'wb') as temp_audio_file:
             with wave.open(temp_audio_file, 'wb') as wave_file:
@@ -328,7 +328,7 @@ class PopupGenerating(customtkinter.CTkFrame):
         self.overlay_frame.lift()
 
         super().__init__(master, corner_radius=10, width=500,fg_color="transparent", border_color="black", **kwargs)
-        title = customtkinter.CTkLabel(master=self, text="Generating Audio...", font=("Helvetica", 16))
+        self.title = customtkinter.CTkLabel(master=self, text="Extracting properties from video...", font=("Helvetica", 16))
         progressbar = customtkinter.CTkProgressBar(master=self, width=500)
         progressbar.configure(mode="indeterminnate")
         progressbar.start()
@@ -336,7 +336,7 @@ class PopupGenerating(customtkinter.CTkFrame):
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(1, weight=1)
 
-        title.grid(row=0, column=0, columnspan=2,padx=20, pady=10, sticky="nsew")
+        self.title.grid(row=0, column=0, columnspan=2,padx=20, pady=10, sticky="nsew")
         progressbar.grid(row=1, column=1, padx=20, pady=10, sticky="nsew")
 
     def close_popup(self):
