@@ -1,11 +1,9 @@
 import random
 import fluidsynth
 import math
-from pydub import AudioSegment
-
 import numpy
+from pydub import AudioSegment
 from pyaudio import PyAudio
-
 
 
 class Synth():
@@ -17,7 +15,6 @@ class Synth():
 		assert self.sfid >= 0, f"Couldn't find soundfont (\"{soundfont_path}\")"
 
 		self.fs = fs
-
 		# 2, 92 - good squarewave
 		# 0, 107 - koto
 		# 0, 40 - violin
@@ -26,10 +23,6 @@ class Synth():
 
 	def changeInstrument(self, channel:int, bank:int, instrument:int):
 		self.fs.program_select(channel, self.sfid, bank, instrument)
-
-
-
-
 
 class MusicGenerator():
 	# scales are defined in semitones
@@ -65,7 +58,6 @@ class MusicGenerator():
 		self.energy_avg = 0
 		self.tasks = []
 
-
 	def update_melody(self):
 		"""
 		Called by the scheduler to change the melody note. The next update_melody() call is scheduled.
@@ -96,19 +88,15 @@ class MusicGenerator():
 	def setScale(self, scale:str):
 		self.melody.scale = self.scales[scale]
 		self.chords.scale = self.scales[scale]
-	
 
 	def note_from_scale(self, scale:list, note:int) -> int:
 		octave = note // len(scale)
 		note = note % len(scale)
 		return self.base_midi_note + scale[note] + 12*octave
 
-
-
 	def get_samples(self, nsamples:int):
 		samples_done = 0
 		samples = []
-
 		run = True
 		while(run):
 			if self.melody.next_change_samples == 0:
@@ -131,11 +119,6 @@ class MusicGenerator():
 			samples = numpy.append(samples, new_samples)
 		
 		return fluidsynth.raw_audio_string(samples)
-
-
-
-
-		
 
 
 class MelodyGenerator():
@@ -179,7 +162,6 @@ class MelodyGenerator():
 	
 	def restart(self):
 		self.next_change_samples = 0
-	
 
 
 class ChordGenerator():
@@ -197,15 +179,12 @@ class ChordGenerator():
 		self.current_arpeggio_note = 0
 		self.arpeggio_note_duration = 0
 		self.next_change_samples = 0
-
-	
 	
 	def next(self):
 		# disable preveously playing notes
 		for note in self.notes_playing:
 			self.mg.synth.fs.noteoff(self.mg.channel["chords"], note)
 		self.notes_playing.clear()
-
 
 		#calculate pitches
 		scale_len = len(self.scale)
@@ -255,28 +234,17 @@ class ChordGenerator():
 		note_index = note % scale_len
 		note_midi = mg.base_midi_note + self.scale[note_index] + 12*note_octave
 		return note_midi
-	
-	
-
-
-	
-
 
 if __name__ == "__main__":
-
 	def play_audio(samples, sample_rate):
 		p = PyAudio()
-
 		stream = p.open(format=p.get_format_from_width(2),
 						channels=2,
 						rate=sample_rate,
 						output=True)
-
 		stream.write(samples)
-
 		stream.stop_stream()
 		stream.close()
-
 		p.terminate()
 	
 	def write_mp3(samples, sample_rate, output_file):
@@ -291,13 +259,9 @@ if __name__ == "__main__":
 	# Example usage
 	sample_rate = 44100  # Sample rate in Hz
 	duration = 5  # Duration of the audio in seconds
-
 	mg = MusicGenerator(samplerate=44100, live=False)
-
 	samples = mg.get_samples(sample_rate * duration)
-
 	output_file = 'output.mp3'
-
 	# Write the audio sample to an MP3 file
 	write_mp3(samples, sample_rate, output_file)
 
