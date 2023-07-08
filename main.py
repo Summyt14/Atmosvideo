@@ -224,7 +224,7 @@ class PlayerControlsFrame(customtkinter.CTkFrame):
 
     def browse(self, video_path=None):
         if video_path:
-            self.video_path = (video_path, False)
+            self.video_path = video_path
         else:
             self.video_path = (customtkinter.filedialog.askopenfilename(), False)
         if self.video_path:
@@ -257,11 +257,24 @@ class PlayerControlsFrame(customtkinter.CTkFrame):
         shutil.copyfile(self.video_path[0], destination_path)
         print(f"File saved to: {destination_path}")
 
-        self.create_thumbnail(destination_path)
         if self.video_path[1] == True:
+            temp_video_path = self.video_path[0]
             self.video_path = (destination_path, False)
-            self.browse(self.video_path[0])
-        self.saved_video_event(destination_path)
+            self.browse(self.video_path)
+
+            def delete_temp_file(file_path):
+                while True:
+                    try:
+                        os.remove(file_path)
+                        print(f"Temp file deleted successfully: {file_path}")
+                        break
+                    except OSError as e:
+                        time.sleep(1)
+            delete_thread = threading.Thread(target=delete_temp_file, args=(temp_video_path,))
+            delete_thread.start()
+
+        self.create_thumbnail(self.video_path[0])
+        self.saved_video_event(self.video_path[0])
 
     def create_thumbnail(self, video_path):
         if not os.path.exists(THUMBNAILS_DIR):
@@ -318,6 +331,7 @@ class PlayerControlsFrame(customtkinter.CTkFrame):
         videoclip.write_videofile(temp_video_path)
         videoclip.close()
         os.remove(temp_audio_path)
+        os.close(temp_video_fd)
         callback(temp_video_path)
 
     def done_generating(self, temp_video_path):
@@ -325,7 +339,7 @@ class PlayerControlsFrame(customtkinter.CTkFrame):
             self.video_path = (temp_video_path, True)
             self.popup_generating.close_popup()
             self.popup_generating = None
-            self.browse(self.video_path[0])
+            self.browse(self.video_path)
             self.play_pause()
 
 
@@ -388,7 +402,7 @@ class App(customtkinter.CTk):
             row=0, column=1, padx=0, pady=10, sticky="nsew")
 
     def label_button_frame_event(self, video_path):
-        self.controls_frame.browse(video_path)
+        self.controls_frame.browse((video_path, False))
         self.controls_frame.play_pause()
 
     def saved_video_event(self, video_path):
