@@ -10,11 +10,12 @@ import tempfile
 from atmosvideo import *
 from moviepy.editor import VideoFileClip, AudioFileClip
 import wave
+import shutil
 
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 THUMBNAILS_DIR = os.path.join(CURRENT_DIR, 'thumbnails')
-VIDEOS_DIR = os.path.join(CURRENT_DIR, 'example_videos')
+VIDEOS_DIR = os.path.join(CURRENT_DIR, 'videos')
 IMAGES_DIR = os.path.join(CURRENT_DIR, 'images')
 
 
@@ -68,7 +69,7 @@ class PlayerControlsFrame(customtkinter.CTkFrame):
         self.vlc_instance = vlc_instance
         self.video_player = video_player
         self.saved_video_event = saved_video_event
-        self.video_path = ""
+        self.video_path = ("", False)
         self.last_volume = 100
         self.popup_generating = None
 
@@ -204,7 +205,7 @@ class PlayerControlsFrame(customtkinter.CTkFrame):
         self.volume_update_pending = False
 
     def seek(self, value):
-        if self.video_path == "":
+        if self.video_path[0] == "":
             return
         if not self.video_player.is_playing():
             self.video_player.play()
@@ -213,7 +214,7 @@ class PlayerControlsFrame(customtkinter.CTkFrame):
             self.video_player.set_time(int(value))
 
     def skip(self, value):
-        if self.video_path == "":
+        if self.video_path[0] == "":
             return
         if not self.video_player.is_playing():
             self.video_player.play()
@@ -223,17 +224,17 @@ class PlayerControlsFrame(customtkinter.CTkFrame):
 
     def browse(self, video_path=None):
         if video_path:
-            self.video_path = video_path
+            self.video_path = (video_path, False)
         else:
-            self.video_path = customtkinter.filedialog.askopenfilename()
+            self.video_path = (customtkinter.filedialog.askopenfilename(), False)
         if self.video_path:
-            media = self.vlc_instance.media_new(self.video_path)
+            media = self.vlc_instance.media_new(self.video_path[0])
             self.video_player.set_media(media)
             self.progress_slider.configure(from_=0, to=1)
             self.progress_value.set(0)
 
     def play_pause(self):
-        if self.video_path == "":
+        if self.video_path[0] == "":
             return
         if self.video_player.is_playing():
             self.video_player.pause()
@@ -247,15 +248,19 @@ class PlayerControlsFrame(customtkinter.CTkFrame):
         if not os.path.exists(VIDEOS_DIR):
             os.makedirs(VIDEOS_DIR)
 
-        if self.video_path == "":
+        if self.video_path[0] == "":
             return
 
         file_types = [("MP4 Files", "*.mp4")]
         destination_path = customtkinter.filedialog.asksaveasfilename(
             initialdir=VIDEOS_DIR, defaultextension=".mp4", filetypes=file_types)
+        shutil.copyfile(self.video_path[0], destination_path)
         print(f"File saved to: {destination_path}")
 
         self.create_thumbnail(destination_path)
+        if self.video_path[1] == True:
+            self.video_path = (destination_path, False)
+            self.browse(self.video_path[0])
         self.saved_video_event(destination_path)
 
     def create_thumbnail(self, video_path):
@@ -283,18 +288,18 @@ class PlayerControlsFrame(customtkinter.CTkFrame):
             self.volume_slider.grid_forget()
 
     def generate(self):
-        if self.video_path != "":
-            self.play_pause()
+        if self.video_path[0] != "":
+            if self.video_player.is_playing():
+                self.video_player.pause()
             self.popup_generating = PopupGenerating(self.master.master, self.done_generating)
             self.popup_generating.place(relx=.5, rely=.5, anchor="center")
             create_audio_thread = threading.Thread(target=self.create_and_merge_audio, args=[self.popup_generating, self.done_generating])
             create_audio_thread.start()
-            
 
     def create_and_merge_audio(self, popup_generating, callback):
         sample_rate = 44100
         atmos = Atmosvideo(sample_rate=sample_rate, live=False)
-        atmos.load(self.video_path)
+        atmos.load(self.video_path[0])
         samples = atmos.start()
         temp_audio_fd, temp_audio_path = tempfile.mkstemp(suffix='.wav')
         popup_generating.title.configure(text="Merging audio to video...")
@@ -307,17 +312,21 @@ class PlayerControlsFrame(customtkinter.CTkFrame):
                 wave_file.writeframes(samples)
 
         audioclip = AudioFileClip(temp_audio_path)
-        videoclip = VideoFileClip(self.video_path)
+        videoclip = VideoFileClip(self.video_path[0])
         videoclip = videoclip.set_audio(audioclip)
-        videoclip.write_videofile("output_video.mp4")
+        temp_video_fd, temp_video_path = tempfile.mkstemp(suffix='.mp4')
+        videoclip.write_videofile(temp_video_path)
         videoclip.close()
         os.remove(temp_audio_path)
-        callback()
+        callback(temp_video_path)
 
-    def done_generating(self):
+    def done_generating(self, temp_video_path):
         if self.popup_generating:
+            self.video_path = (temp_video_path, True)
             self.popup_generating.close_popup()
             self.popup_generating = None
+            self.browse(self.video_path[0])
+            self.play_pause()
 
 
 class PopupGenerating(customtkinter.CTkFrame):
